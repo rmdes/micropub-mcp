@@ -147,6 +147,21 @@ If the token has a `refresh_token` and is expired, `getToken()` automatically at
 
 No Express, no Hono — uses Bun's built-in `fetch()` and `Bun.serve()`.
 
+## Syndication Target UIDs (rmendes.net)
+
+When using `syndicate_to` in `micropub_create`, use the exact UIDs from the server — not Bridgy or guessed URLs.
+
+| Target | UID |
+|--------|-----|
+| Bluesky | `https://bsky.app/profile/rmendes.net` |
+| ActivityPub | `https://rmendes.net/` |
+| Mastodon | `https://indieweb.social/@rmdes` |
+| LinkedIn | `https://www.linkedin.com/in/mendesr/` |
+| IndieNews (EN) | `https://news.indieweb.org/en` |
+| IndieNews (FR) | `https://news.indieweb.org/fr` |
+
+Query `micropub_query` with `q: "syndicate-to"` to get the current list from any site.
+
 ## Workspace Context
 
 This repo is part of the Indiekit development workspace at `/home/rick/code/indiekit-dev/`. The primary blog it targets is https://rmendes.net, deployed via the `indiekit-cloudron` repo. See `/home/rick/code/indiekit-dev/CLAUDE.md` for the full workspace map.
