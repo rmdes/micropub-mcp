@@ -7,40 +7,146 @@ MCP server that lets Claude Code create, update, delete, and query posts on an I
 ## Commands
 
 ```bash
-bun run src/index.ts    # Start MCP server (stdio)
-bun test                # Run tests
+bun run src/index.ts   # Start MCP server (stdio transport)
+bun test               # Run all tests (22 tests across 3 files)
 ```
+
+No build step — Bun runs TypeScript directly.
 
 ## Architecture
 
-Single process with three internal modules:
+Single Bun process, five source modules:
 
-- **discovery.ts** — Discovers micropub/auth endpoints from a site URL (Link headers + HTML + indieauth-metadata)
-- **auth.ts** — IndieAuth with PKCE, token storage at `~/.config/micropub-mcp/<domain>.json`, refresh
-- **client.ts** — Micropub HTTP client (create/update/delete/undelete/query/upload)
-- **tools.ts** — MCP tool definitions mapping to client methods
-- **index.ts** — Entry point, wires McpServer to StdioServerTransport
+```
+index.ts          McpServer + StdioServerTransport wiring (15 LOC)
+    └── tools.ts      7 MCP tool definitions with Zod schemas (291 LOC)
+        ├── auth.ts       IndieAuth PKCE, token storage, callback server (384 LOC)
+        ├── client.ts     Micropub HTTP client (222 LOC)
+        └── discovery.ts  Endpoint discovery (91 LOC)
+```
 
-## MCP Tools
+### Data Flow
 
-| Tool | Purpose |
-|------|---------|
-| `micropub_auth` | Authenticate via IndieAuth (opens browser) |
-| `micropub_create` | Create a post (note, article, photo, etc.) |
-| `micropub_update` | Update a post (replace/add/delete properties) |
-| `micropub_delete` | Delete a post |
-| `micropub_undelete` | Restore a deleted post |
-| `micropub_query` | Query config, posts, syndication targets, post types |
-| `micropub_upload` | Upload media files |
+```
+User calls MCP tool
+  → tools.ts validates params (Zod)
+  → getClient() loads token from disk
+  → client.ts makes HTTP request to blog's Micropub endpoint
+  → returns result to MCP caller
+```
 
-## First Use
+### Key Design Decisions
 
-1. Call `micropub_auth` with your site URL (e.g., `https://rmendes.net`)
-2. Approve in the browser that opens
-3. Start creating posts with `micropub_create`
+| Decision | Rationale |
+|----------|-----------|
+| Process-level singleton callback server | Auth server must survive across MCP tool calls (each tool call is a separate request) |
+| Non-blocking `startAuth()` | MCP tool calls have timeouts; auth flow requires user interaction in browser |
+| Token storage on disk (`~/.config/`) | Persists across MCP server restarts without re-authentication |
+| PKCE with S256 | Required by IndieAuth spec, prevents authorization code interception |
+| Bun.serve for callback | Zero dependencies — no Express/Hono needed |
+| Default site URL (rmendes.net) | Reduces friction for primary use case |
 
-Token is stored at `~/.config/micropub-mcp/<domain>.json` and reused across sessions.
+## MCP Tools (7 total)
 
-## Default Site
+| Tool | Description | Key Params |
+|------|-------------|------------|
+| `micropub_auth` | IndieAuth login (opens browser) | `site_url`, `scope` |
+| `micropub_create` | Create post (note, article, etc.) | `content`, `name`, `category[]`, `syndicate_to[]` |
+| `micropub_update` | Update post properties | `url`, `replace{}`, `add{}`, `delete_properties[]` |
+| `micropub_delete` | Delete a post | `url` |
+| `micropub_undelete` | Restore deleted post | `url` |
+| `micropub_query` | Query config/posts/syndication | `q` (config, source, syndicate-to, post-types, category, channel) |
+| `micropub_upload` | Upload media file | `file_path` |
 
-When no site URL is provided to tools (other than `micropub_auth`), the default is `https://rmendes.net`.
+## Authentication Flow
+
+The auth flow is **non-blocking** — critical for MCP where tool calls can be aborted:
+
+1. `micropub_auth` called → `startAuth()` runs
+2. `discoverEndpoints(siteUrl)` finds authorization/token endpoints
+3. PKCE verifier + challenge generated
+4. Callback server starts on `localhost:19750` (process-level singleton)
+5. Browser opens to authorization endpoint
+6. `startAuth()` returns immediately with `{ authUrl }` — tool call completes
+7. User approves in browser → redirect to `localhost:19750/callback?code=...&state=...`
+8. Callback server exchanges code for token, saves to disk, shuts down
+9. Next tool call loads token from `~/.config/micropub-mcp/<domain>.json`
+
+**Module-level singletons** (in `auth.ts`):
+- `activeServer`: The `Bun.serve()` instance (or null)
+- `activeSession`: Current auth session state (or null)
+
+**Token persistence**: `~/.config/micropub-mcp/<domain>.json` contains access_token, refresh_token, expiration, and discovered endpoints.
+
+## Constants
+
+```
+CALLBACK_PORT = 19750
+CLIENT_ID = http://localhost:19750/
+REDIRECT_URI = http://localhost:19750/callback
+DEFAULT_SCOPE = "create update delete media"
+```
+
+## Endpoint Discovery
+
+`discovery.ts` finds Micropub + IndieAuth endpoints from a site URL:
+
+1. Fetch site URL, follow redirects
+2. Parse `Link` HTTP headers (highest priority)
+3. Parse `<link rel="...">` tags from HTML
+4. If `indieauth-metadata` found, fetch it for auth/token endpoints
+5. Merge: HTTP headers override HTML links
+
+Required: `micropub` endpoint. Optional: `media_endpoint`, `authorization_endpoint`, `token_endpoint`.
+
+## Micropub Client
+
+`client.ts` is a pure HTTP client — no MCP awareness:
+
+- **create**: POST JSON with `type: ["h-entry"]` and mf2 properties
+- **update**: POST JSON with `action: "update"`, `url`, `replace`/`add`/`delete`
+- **delete/undelete**: POST JSON with `action: "delete"|"undelete"`, `url`
+- **query**: GET with `?q=config|source|syndicate-to|...`
+- **uploadMedia**: POST FormData to media endpoint, returns Location header
+
+## Tests
+
+```
+src/discovery.test.ts    7 tests — Link header parsing, HTML parsing, indieauth-metadata
+src/auth.test.ts         8 tests — PKCE generation, TokenStore persistence, expiration
+src/client.test.ts       7 tests — create, update, delete, query, error handling
+```
+
+All tests mock `fetch` at the global level — no network calls.
+
+## Known Gotchas
+
+### Indiekit CSP blocks OAuth redirect
+
+Indiekit's nginx CSP header (`form-action 'self' https:`) blocks the redirect from `/auth/consent` to `http://localhost:19750/callback` (HTTP, not HTTPS). The `/auth` location block must override CSP with `form-action *`. Without this fix, clicking "Allow" does nothing and logs show HTTP 499.
+
+### Indiekit redirect validation regex
+
+Upstream Indiekit's redirect regex (`/^\/[\w&/=?]*$/`) rejects hyphens in paths like `/auth/new-password`. This causes `ForbiddenError: Invalid redirect attempted`. Fixed by patching `lib/indieauth.js` with `/^\/[\w&/=?.\-~:%+@#]*$/`.
+
+### MCP tool call timeouts
+
+MCP tool calls have a timeout. If auth were blocking (wait for browser callback), the tool call would be aborted, killing the callback server before the user can approve. The non-blocking pattern (return auth URL immediately, callback server persists at process level) solves this.
+
+### Token refresh
+
+If the token has a `refresh_token` and is expired, `getToken()` automatically attempts refresh. If refresh fails, returns null and the user must re-authenticate.
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `@modelcontextprotocol/sdk` | MCP server primitives (McpServer, StdioServerTransport) |
+| `open` | Opens browser for IndieAuth authorization |
+| `zod` | Schema validation for MCP tool parameters |
+
+No Express, no Hono — uses Bun's built-in `fetch()` and `Bun.serve()`.
+
+## Workspace Context
+
+This repo is part of the Indiekit development workspace at `/home/rick/code/indiekit-dev/`. The primary blog it targets is https://rmendes.net, deployed via the `indiekit-cloudron` repo. See `/home/rick/code/indiekit-dev/CLAUDE.md` for the full workspace map.

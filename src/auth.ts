@@ -61,27 +61,41 @@ export class TokenStore {
   }
 }
 
-// --- IndieAuth Flow ---
+// --- IndieAuth Flow (non-blocking) ---
 
 const CALLBACK_PORT = 19750;
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}/callback`;
 const CLIENT_ID = `http://localhost:${CALLBACK_PORT}/`;
 const DEFAULT_SCOPE = "create update delete media";
 
+export interface AuthSession {
+  authUrl: string;
+  siteUrl: string;
+  state: string;
+  verifier: string;
+  tokenEndpoint: string;
+  endpoints: Endpoints;
+  store: TokenStore;
+}
+
+/** Process-level singleton: the callback server and pending auth session. */
+let activeServer: ReturnType<typeof Bun.serve> | null = null;
+let activeSession: AuthSession | null = null;
+
 /**
- * Run the full IndieAuth flow:
+ * Start the IndieAuth flow (non-blocking):
  * 1. Discover endpoints
  * 2. Generate PKCE
- * 3. Open browser for authorization
- * 4. Wait for callback on temp server
- * 5. Exchange code for token
- * 6. Save token to disk
+ * 3. Start callback server (process-level, survives across tool calls)
+ * 4. Return the auth URL immediately — do NOT block
+ *
+ * The callback server handles code exchange + token saving independently.
  */
-export async function authenticate(
+export async function startAuth(
   siteUrl: string,
   scope: string = DEFAULT_SCOPE,
   store: TokenStore = new TokenStore()
-): Promise<TokenData> {
+): Promise<{ authUrl: string }> {
   const endpoints = await discoverEndpoints(siteUrl);
 
   if (!endpoints.authorization_endpoint || !endpoints.token_endpoint) {
@@ -105,79 +119,130 @@ export async function authenticate(
   authUrl.searchParams.set("code_challenge_method", "S256");
   authUrl.searchParams.set("me", siteUrl);
 
-  // Wait for callback via temp server, then exchange code
-  const code = await waitForCallback(state, authUrl.toString());
-  const tokenData = await exchangeCode(
-    code,
-    pkce.verifier,
-    endpoints.token_endpoint,
-    endpoints
-  );
+  // Store session info for the callback handler
+  activeSession = {
+    authUrl: authUrl.toString(),
+    siteUrl,
+    state,
+    verifier: pkce.verifier,
+    tokenEndpoint: endpoints.token_endpoint,
+    endpoints,
+    store,
+  };
 
-  const domain = new URL(siteUrl).hostname;
-  await store.save(domain, tokenData);
+  // Start (or restart) the callback server at the process level
+  startCallbackServer();
 
-  return tokenData;
+  // Open browser
+  const authUrlStr = authUrl.toString();
+  console.error(`\n[micropub-mcp] Opening browser for authentication...`);
+  console.error(`[micropub-mcp] If the browser doesn't open, visit this URL manually:`);
+  console.error(`[micropub-mcp] ${authUrlStr}\n`);
+
+  open(authUrlStr).catch((err) => {
+    console.error(`[micropub-mcp] Failed to open browser: ${err.message}`);
+    console.error(`[micropub-mcp] Please open the URL above manually.`);
+  });
+
+  return { authUrl: authUrlStr };
 }
 
 /**
- * Start a temporary HTTP server, open the browser, wait for the OAuth callback.
- * Returns the authorization code.
+ * Start the callback server as a process-level singleton.
+ * It handles the OAuth callback, exchanges the code for a token,
+ * and saves the token to disk — all independently of any MCP tool call.
  */
-function waitForCallback(
-  expectedState: string,
-  authUrl: string
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      server.stop();
-      reject(new Error("Authentication timed out after 5 minutes"));
-    }, 5 * 60 * 1000);
+function startCallbackServer(): void {
+  // Stop existing server if any
+  if (activeServer) {
+    try {
+      activeServer.stop();
+    } catch {
+      // ignore
+    }
+  }
 
-    const server = Bun.serve({
-      port: CALLBACK_PORT,
-      fetch(req) {
-        const url = new URL(req.url);
+  activeServer = Bun.serve({
+    port: CALLBACK_PORT,
+    async fetch(req) {
+      const url = new URL(req.url);
 
-        if (url.pathname === "/callback") {
-          const code = url.searchParams.get("code");
-          const returnedState = url.searchParams.get("state");
+      if (url.pathname === "/callback") {
+        const code = url.searchParams.get("code");
+        const returnedState = url.searchParams.get("state");
 
-          if (!code || !returnedState) {
-            return new Response("Missing code or state", { status: 400 });
-          }
+        if (!code || !returnedState) {
+          return new Response("Missing code or state", { status: 400 });
+        }
 
-          if (returnedState !== expectedState) {
-            return new Response("State mismatch", { status: 403 });
-          }
+        if (!activeSession) {
+          return new Response("No active auth session", { status: 400 });
+        }
 
-          clearTimeout(timeout);
-          server.stop();
-          resolve(code);
+        if (returnedState !== activeSession.state) {
+          return new Response("State mismatch", { status: 403 });
+        }
+
+        // Exchange code for token in the background
+        const session = activeSession;
+        activeSession = null;
+
+        try {
+          const tokenData = await exchangeCode(
+            code,
+            session.verifier,
+            session.tokenEndpoint,
+            session.endpoints
+          );
+
+          const domain = new URL(session.siteUrl).hostname;
+          await session.store.save(domain, tokenData);
+
+          console.error(
+            `[micropub-mcp] Authentication successful! Token saved for ${domain}.`
+          );
+
+          // Stop the server after successful auth
+          setTimeout(() => {
+            if (activeServer) {
+              activeServer.stop();
+              activeServer = null;
+            }
+          }, 1000);
 
           return new Response(
             "<html><body><h1>Authenticated!</h1>" +
               "<p>You can close this tab and return to your terminal.</p>" +
+              "<p>Use <code>micropub_auth</code> again to confirm, " +
+              "or start creating posts with <code>micropub_create</code>.</p>" +
               "</body></html>",
             { headers: { "Content-Type": "text/html" } }
           );
-        }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[micropub-mcp] Token exchange failed: ${msg}`);
 
-        if (url.pathname === "/") {
           return new Response(
-            `<html><head>` +
-              `<link rel="redirect_uri" href="${REDIRECT_URI}">` +
-              `</head><body><h1>Micropub MCP Client</h1></body></html>`,
-            { headers: { "Content-Type": "text/html" } }
+            `<html><body><h1>Authentication Failed</h1><p>${msg}</p></body></html>`,
+            { status: 500, headers: { "Content-Type": "text/html" } }
           );
         }
+      }
 
-        return new Response("Not found", { status: 404 });
-      },
-    });
+      if (url.pathname === "/") {
+        return new Response(
+          `<html><head>` +
+            `<link rel="redirect_uri" href="${REDIRECT_URI}">` +
+            `</head><body><h1>Micropub MCP Client</h1></body></html>`,
+          { headers: { "Content-Type": "text/html" } }
+        );
+      }
 
-    open(authUrl).catch(reject);
+      return new Response("Not found", { status: 404 });
+    },
   });
+
+  console.error(`[micropub-mcp] Callback server listening on port ${CALLBACK_PORT}`);
 }
 
 /**
@@ -310,4 +375,9 @@ export async function getToken(
   }
 
   return null;
+}
+
+/** Check if there's a pending auth session waiting for callback. */
+export function hasPendingAuth(): boolean {
+  return activeSession !== null;
 }

@@ -2,7 +2,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { MicropubClient } from "./client";
-import { authenticate, getToken, TokenStore, type TokenData } from "./auth";
+import { startAuth, getToken, hasPendingAuth, TokenStore, type TokenData } from "./auth";
 
 const store = new TokenStore();
 
@@ -43,6 +43,7 @@ export function registerTools(server: McpServer): void {
         .describe("OAuth scopes (default: 'create update delete media')"),
     },
     async ({ site_url, scope }) => {
+      // Check if already authenticated
       const existing = await getToken(site_url, store);
       if (existing) {
         return {
@@ -60,16 +61,40 @@ export function registerTools(server: McpServer): void {
         };
       }
 
-      const tokenData = await authenticate(site_url, scope, store);
+      // Check if auth is pending (user hasn't clicked Allow yet)
+      if (hasPendingAuth()) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: [
+                "Authentication is still in progress.",
+                "Please complete the authorization in your browser (click Allow).",
+                "The callback server is running and waiting for the redirect.",
+                "Call this tool again after you've approved in the browser.",
+              ].join("\n"),
+            },
+          ],
+        };
+      }
+
+      // Start non-blocking auth flow: returns immediately with auth URL
+      const { authUrl } = await startAuth(site_url, scope, store);
       return {
         content: [
           {
             type: "text" as const,
             text: [
-              `Authenticated as ${tokenData.me}`,
-              `Micropub endpoint: ${tokenData.micropub_endpoint}`,
-              `Media endpoint: ${tokenData.media_endpoint || "none"}`,
-              `Scope: ${tokenData.scope}`,
+              "Authentication started! A browser window should have opened.",
+              "",
+              "Please:",
+              "1. Enter your password in the consent form",
+              "2. Click 'Allow' to authorize",
+              "3. Wait for the 'Authenticated!' confirmation page",
+              "4. Then call micropub_auth again to confirm, or start using micropub_create",
+              "",
+              `If the browser didn't open, visit this URL manually:`,
+              authUrl,
             ].join("\n"),
           },
         ],
