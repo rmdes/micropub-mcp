@@ -147,6 +147,45 @@ If the token has a `refresh_token` and is expired, `getToken()` automatically at
 
 No Express, no Hono — uses Bun's built-in `fetch()` and `Bun.serve()`.
 
+## MANDATORY: AI Metadata on Every Post
+
+**When creating posts via `micropub_create`, ALWAYS include AI metadata fields.** This is not optional — every post created by an AI agent must carry transparency disclosure.
+
+| Field | Value to use | Description |
+|-------|-------------|-------------|
+| `ai_text_level` | `"2"` (Co-drafting) or `"3"` (AI-generated, human reviewed) | `"2"` when user provides the idea and AI drafts; `"3"` when AI generates with minimal input |
+| `ai_code_level` | `"0"` (omit for non-code posts) | Only set for posts containing code |
+| `ai_tools` | `"Claude"` | The AI tool used |
+| `ai_description` | `"Co-drafted with Claude Code via Micropub MCP client"` | Brief description of AI involvement |
+
+### Level Guide
+
+**ai_text_level:**
+- `"0"` — No AI (human wrote everything)
+- `"1"` — Editorial assistance (AI fixed grammar/spelling)
+- `"2"` — Co-drafting (user provided idea/direction, AI wrote the text)
+- `"3"` — AI-generated (AI wrote it, human reviewed before publishing)
+
+**ai_code_level:**
+- `"0"` — Human-written
+- `"1"` — AI-assisted
+- `"2"` — Primarily AI-generated
+
+### Example
+
+Every `micropub_create` call should look like this:
+
+```
+micropub_create(
+  content: "...",
+  category: [...],
+  syndicate_to: [...],
+  ai_text_level: "2",
+  ai_tools: "Claude",
+  ai_description: "Co-drafted with Claude Code via Micropub MCP client"
+)
+```
+
 ## Syndication Target UIDs (rmendes.net)
 
 When using `syndicate_to` in `micropub_create`, use the exact UIDs from the server — not Bridgy or guessed URLs.
