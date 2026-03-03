@@ -71,6 +71,34 @@ describe("MicropubClient", () => {
       expect(body.properties["post-status"]).toEqual(["draft"]);
     });
 
+    it("should include AI metadata properties", async () => {
+      globalThis.fetch = mock(() =>
+        Promise.resolve(
+          new Response(null, {
+            status: 201,
+            headers: { Location: "https://example.com/notes/ai-post" },
+          })
+        )
+      ) as typeof fetch;
+
+      await client.create({
+        content: "AI-assisted post",
+        aiTextLevel: "2",
+        aiCodeLevel: "1",
+        aiTools: "Claude",
+        aiDescription: "Co-drafted with Claude Code",
+      });
+
+      const call = (globalThis.fetch as ReturnType<typeof mock>).mock.calls[0];
+      const body = JSON.parse(
+        (call as [string, RequestInit])[1].body as string
+      );
+      expect(body.properties["ai-text-level"]).toEqual(["2"]);
+      expect(body.properties["ai-code-level"]).toEqual(["1"]);
+      expect(body.properties["ai-tools"]).toEqual(["Claude"]);
+      expect(body.properties["ai-description"]).toEqual(["Co-drafted with Claude Code"]);
+    });
+
     it("should throw on error response", async () => {
       globalThis.fetch = mock(() =>
         Promise.resolve(

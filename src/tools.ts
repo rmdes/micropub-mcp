@@ -152,6 +152,26 @@ export function registerTools(server: McpServer): void {
         .optional()
         .describe("Post status (default: published)"),
       published: z.string().optional().describe("Publication date (ISO 8601)"),
+      ai_text_level: z
+        .enum(["0", "1", "2", "3"])
+        .optional()
+        .describe(
+          "AI text usage: 0=None, 1=Editorial assistance, 2=Co-drafting, 3=AI-generated (human reviewed)"
+        ),
+      ai_code_level: z
+        .enum(["0", "1", "2"])
+        .optional()
+        .describe(
+          "AI code usage: 0=Human-written, 1=AI-assisted, 2=Primarily AI-generated"
+        ),
+      ai_tools: z
+        .string()
+        .optional()
+        .describe("AI tools used (e.g. Claude, ChatGPT, Copilot)"),
+      ai_description: z
+        .string()
+        .optional()
+        .describe("Description of how AI was used"),
     },
     async (args) => {
       const { client } = await getClient();
@@ -169,6 +189,10 @@ export function registerTools(server: McpServer): void {
         slug: args.slug,
         postStatus: args.post_status,
         published: args.published,
+        aiTextLevel: args.ai_text_level,
+        aiCodeLevel: args.ai_code_level,
+        aiTools: args.ai_tools,
+        aiDescription: args.ai_description,
       });
 
       return {

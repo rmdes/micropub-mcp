@@ -28,6 +28,10 @@ export interface CreateOptions {
   postStatus?: string;
   published?: string;
   summary?: string;
+  aiTextLevel?: string;
+  aiCodeLevel?: string;
+  aiTools?: string;
+  aiDescription?: string;
 }
 
 export interface UpdateOptions {
@@ -105,6 +109,10 @@ export class MicropubClient {
     if (options.audio) properties.audio = options.audio;
     if (options.slug) properties["mp-slug"] = [options.slug];
     if (options.postStatus) properties["post-status"] = [options.postStatus];
+    if (options.aiTextLevel) properties["ai-text-level"] = [options.aiTextLevel];
+    if (options.aiCodeLevel) properties["ai-code-level"] = [options.aiCodeLevel];
+    if (options.aiTools) properties["ai-tools"] = [options.aiTools];
+    if (options.aiDescription) properties["ai-description"] = [options.aiDescription];
 
     const hType = options.type === "event" ? "h-event" : "h-entry";
 
