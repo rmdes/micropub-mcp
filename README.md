@@ -79,6 +79,10 @@ Create a new post (note, article, photo, bookmark, etc.).
 | `slug` | string | No | URL slug |
 | `post_status` | string | No | `published` or `draft` |
 | `published` | string | No | ISO 8601 date |
+| `ai_text_level` | string | No | AI text involvement: `0` (None), `1` (Editorial), `2` (Co-drafting), `3` (AI-generated) |
+| `ai_code_level` | string | No | AI code involvement: `0` (Human), `1` (AI-assisted), `2` (Primarily AI) |
+| `ai_tools` | string | No | AI tools used (e.g. `"Claude"`, `"ChatGPT, Copilot"`) |
+| `ai_description` | string | No | Free-text description of AI usage |
 
 **Examples:**
 
@@ -88,6 +92,7 @@ Create an article: { name: "My Title", content: "Article body..." }
 Create a bookmark: { like_of: "https://example.com/post" }
 Create a reply: { in_reply_to: "https://example.com/post", content: "Great post!" }
 Syndicate: { content: "Cross-posted!", syndicate_to: ["https://brid.gy/publish/bluesky"] }
+With AI metadata: { content: "AI-assisted post", ai_text_level: "2", ai_tools: "Claude" }
 ```
 
 ### micropub_update
@@ -148,6 +153,21 @@ Upload a media file to the server's media endpoint.
 | `file_path` | string | Yes | Absolute path to the file |
 
 Returns the uploaded file's URL, which can be used in `photo`, `video`, or `audio` parameters of `micropub_create`.
+
+## AI Transparency Metadata
+
+Posts can optionally carry metadata disclosing AI involvement. These fields are sent as standard Micropub mf2 properties (`ai-text-level`, `ai-code-level`, `ai-tools`, `ai-description`).
+
+**All fields are optional.** If your Micropub server doesn't know about them, it will simply store them as extra properties or ignore them — no special server-side support is required. This works with any standard Micropub endpoint.
+
+| Level | `ai_text_level` | `ai_code_level` |
+|-------|-----------------|-----------------|
+| 0 | None — human wrote everything | Human-written |
+| 1 | Editorial assistance (grammar, spelling) | AI-assisted |
+| 2 | Co-drafting (human directed, AI wrote) | Primarily AI-generated |
+| 3 | AI-generated (human reviewed) | — |
+
+If your server does support these fields (e.g., [Indiekit](https://getindiekit.com) with `@rmdes/indiekit-endpoint-posts`), they can be displayed in the post form UI and used for filtering or labeling posts.
 
 ## How Authentication Works
 
