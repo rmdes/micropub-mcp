@@ -142,6 +142,11 @@ export function registerTools(server: McpServer): void {
         .url()
         .optional()
         .describe("URL this post is a repost of"),
+      bookmark_of: z
+        .string()
+        .url()
+        .optional()
+        .describe("URL this post is a bookmark of"),
       photo: z
         .array(z.string())
         .optional()
@@ -185,6 +190,7 @@ export function registerTools(server: McpServer): void {
         inReplyTo: args.in_reply_to,
         likeOf: args.like_of,
         repostOf: args.repost_of,
+        bookmarkOf: args.bookmark_of,
         photo: args.photo,
         slug: args.slug,
         postStatus: args.post_status,

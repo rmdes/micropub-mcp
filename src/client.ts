@@ -28,6 +28,7 @@ export interface CreateOptions {
   postStatus?: string;
   published?: string;
   summary?: string;
+  bookmarkOf?: string;
   aiTextLevel?: string;
   aiCodeLevel?: string;
   aiTools?: string;
@@ -104,6 +105,7 @@ export class MicropubClient {
     if (options.inReplyTo) properties["in-reply-to"] = [options.inReplyTo];
     if (options.likeOf) properties["like-of"] = [options.likeOf];
     if (options.repostOf) properties["repost-of"] = [options.repostOf];
+    if (options.bookmarkOf) properties["bookmark-of"] = [options.bookmarkOf];
     if (options.photo) properties.photo = options.photo;
     if (options.video) properties.video = options.video;
     if (options.audio) properties.audio = options.audio;
